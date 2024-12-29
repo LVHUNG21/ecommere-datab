@@ -1,0 +1,172 @@
+@startuml
+skinparam backgroundColor #EEEBDC
+skinparam participant {
+    FontSize 16
+}
+
+skinparam altBackgroundColor #LightBlue
+skinparam elseBackgroundColor #Pink
+skinparam successBackgroundColor #LightGreen
+
+participant Client
+participant Server
+participant PaymentGateway
+participant Database
+
+' createOrder process
+Client -> Server : HTTP Request (POST /order/create)
+activate Server
+
+alt Missing required parameters
+    Server -> Client : HTTP Response (400 Bad Request) 'Missing required parameters'
+    deactivate Server
+else Valid parameters
+    Server -> Database : Retrieve buyerId using userId
+    activate Database
+    Database --> Server : Return buyerId
+    deactivate Database
+
+    Server -> Database : Retrieve cart items using buyerId
+    activate Database
+    Database --> Server : Return cart items
+    deactivate Database
+
+    alt Shopping cart is empty
+        Server -> Client : HTTP Response (400 Bad Request) 'Shopping cart is empty'
+        deactivate Server
+    else Cart items available
+        Server -> Database : Check stock for cart items
+        activate Database
+        Database --> Server : Return stock check results
+        deactivate Database
+
+        alt Insufficient stock
+            Server -> Client : HTTP Response (400 Bad Request) 'Insufficient stock for products'
+            deactivate Server
+        else Sufficient stock
+            Server -> Database : Calculate total amount for cart items
+            activate Database
+            Database --> Server : Return total amount
+            deactivate Database
+
+            alt Voucher provided
+                Server -> Database : Validate voucher and calculate final price
+                activate Database
+                Database --> Server : Return final price with voucher applied
+                deactivate Database
+
+                Server -> Database : Check for applicable discounts
+                activate Database
+                Database --> Server : Return discount percentage
+                deactivate Database
+            end
+
+            alt Use default shipping address and method
+                Server -> Database : Retrieve default shipping address and method
+                activate Database
+                Database --> Server : Return default shipping address and method
+                deactivate Database
+            end
+
+            Server -> Database : Retrieve shipping address details
+            activate Database
+            Database --> Server : Return shipping address details
+            deactivate Database
+
+            Server -> Database : Retrieve shipping method details
+            activate Database
+            Database --> Server : Return shipping method details
+            deactivate Database
+
+            Server -> Database : Create order with calculated total amount
+            activate Database
+            Database --> Server : Return orderId
+            deactivate Database
+
+            alt Apply discount details
+                Server -> Database : Save discount details and update order total price
+                activate Database
+                Database --> Server : Return confirmation
+                deactivate Database
+            end
+
+            Server -> Database : Create order items for orderId
+            activate Database
+            Database --> Server : Return confirmation
+            deactivate Database
+
+            Server -> Database : Update shopping cart total price
+            activate Database
+            Database --> Server : Return confirmation
+            deactivate Database
+
+            Server -> Database : Delete cart items for buyerId
+            activate Database
+            Database --> Server : Return confirmation
+            deactivate Database
+
+            Server -> Client : HTTP Response (200 OK) 'Order created successfully, please proceed to payment'
+            deactivate Server
+        end
+    end
+end
+
+' confirm-payment process
+Client->Server: HTTP Request (POST /order/confirm-payment)
+activate Server
+Server->Server: Validate request parameters
+
+alt Valid request
+    Server->Database: Retrieve buyer_id from user_id
+    activate Database
+    Database->Server: Return buyer_id
+    deactivate Database
+
+    Server->Database: Fetch order details by orderId
+    activate Database
+    Database->Server: Return order details
+    deactivate Database
+    
+    alt Order found
+        Server->Database: Fetch order items for orderId
+        activate Database
+        Database->Server: Return order items
+        deactivate Database
+
+        Server->Server: Calculate total amount from order items
+
+        Server->PaymentGateway: POST /order/mock-payment-gateway
+        activate PaymentGateway
+        PaymentGateway->PaymentGateway: Process payment
+
+        alt Payment successful
+            PaymentGateway->Server: Return transactionId
+            deactivate PaymentGateway
+            Server->Database: Create payment record
+            activate Database
+            Database->Server: Return payment record confirmation
+            deactivate Database
+
+            Server->Database: Allocate stock for order items
+            activate Database
+            Database->Server: Return stock allocation confirmation
+            deactivate Database
+
+            Server->Server: Update product quantities
+            Server->Server: Update order status to 'payment confirmed'
+            Server->Server: Create invoice
+
+            Server->Client: HTTP Response (200 OK) 'Payment confirmed, order processed'
+        else Payment failed
+            PaymentGateway->Server: Return payment failure response
+            deactivate PaymentGateway
+            Server->Client: HTTP Response (400 Bad Request) 'Payment failed'
+        end
+    else Order not found
+        Server->Client: HTTP Response (404 Not Found) 'Order not found'
+    end
+else Invalid request parameters
+    Server->Client: HTTP Response (400 Bad Request) 'Invalid request parameters'
+end
+deactivate Server
+@enduml
